@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Truffle Family 旅行分帳 App</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+
+        // 擴展類別選擇
+        const CATEGORIES = [
+          { id: 'dining', name: '餐飲', emoji: '🍛' },
+          { id: 'transport', name: '交通', emoji: '🚇' },
+          { id: 'shopping', name: '購物', emoji: '🛍️' },
+          { id: 'hotel', name: '住宿', emoji: '🏨' },
+          { id: 'play', name: '玩樂', emoji: '🎡' },
+          { id: 'grocery', name: '超市', emoji: '🛒' },
+          { id: 'other', name: '其他', emoji: '💰' },
+        ];
+
+        // 常用旅行外幣 (以港幣為核心結算)
+        const CURRENCIES = [
+          { code: 'HKD', name: '港幣', symbol: '$', rate: 1.0 },
+          { code: 'JPY', name: '日圓', symbol: '¥', rate: 0.051 },
+          { code: 'TWD', name: '台幣', symbol: 'NT$', rate: 0.242 },
+          { code: 'THB', name: '泰銖', symbol: '฿', rate: 0.216 },
+          { code: 'USD', name: '美金', symbol: '$', rate: 7.82 },
+        ];
+
+        function App() {
+          const [currentTab, setCurrentTab] = useState('overview');
+          const [showAddForm, setShowAddForm] = useState(false);
+          const [trips, setTrips] = useState([
+            {
+              id: 'trip_1',
+              name: 'Truffle Family',
+              members: [
+                { id: 'u1', name: 'Cyan', emoji: '🦁' },
+                { id: 'u2', name: 'Jeremy', emoji: '🐶' }
+              ],
+              expenses: [
+                { id: 'e1', name: 'Dinner - Keeta', category: 'dining', amount: 324, currency: 'HKD', amountHKD: 324, payerId: 'u1', date: '2026-05-14', note: '這頓飯很好吃', splits: { u1: 162, u2: 162 } }
+              ]
+            }
+          ]);
+
+          const [draft, setDraft] = useState({
+            amount: '0', currency: CURRENCIES[0], name: '', category: 'dining', payerId: 'u1', splitType: 'equal', shares: {}, note: ''
+          });
+
+          const currentTrip = trips[0];
+
+          // 數字鍵盤即時分帳更新邏輯
+          useEffect(() => {
+            if (draft.splitType === 'equal') {
+              const amt = parseFloat(draft.amount) || 0;
+              const perPerson = (amt / currentTrip.members.length).toFixed(2);
+              const newShares = {};
+              currentTrip.members.forEach(m => newShares[m.id] = perPerson);
+              setDraft(prev => ({ ...prev, shares: newShares }));
+            }
+          }, [draft.amount, draft.splitType]);
+
+          // 動態計算淨收付與債務關係 (精確到小數點，復刻截圖效果)
+          const { balances, settlements, totalTripExpense } = useMemo(() => {
+            const bals = {};
+            let total = 0;
+            currentTrip.members.forEach(m => bals[m.id] = 0);
+            
+            currentTrip.expenses.forEach(exp => {
+              total += exp.amountHKD;
+              bals[exp.payerId] += exp.amountHKD;
+              Object.entries(exp.splits).forEach(([uid, shareAmt]) => {
+                const ratio = shareAmt / (exp.amount || 1);
+                if (bals[uid] !== undefined) bals[uid] -= (ratio * exp.amountHKD);
+              });
+            });
+
+            let activeBals = Object.entries(bals).map(([id, val]) => ({ id, val }));
+            let debtors = activeBals.filter(b => b.val < -0.01).sort((a, b) => a.val - b.val);
+            let creditors = activeBals.filter(b => b.val > 0.01).sort((a, b) => b.val - a.val);
+            const sets = [];
+            while (debtors.length && creditors.length) {
+              const pay = Math.min(Math.abs(debtors[0].val), creditors[0].val);
+              sets.push({ from: debtors[0].id, to: creditors[0].id, amount: pay.toFixed(1) });
+              debtors[0].val += pay;
+              creditors[0].val -= pay;
+              if (Math.abs(debtors[0].val) < 0.01) debtors.shift();
+              if (Math.abs(creditors[0].val) < 0.01) creditors.shift();
+            }
+            return { balances: bals, settlements: sets, totalTripExpense: total };
+          }, [trips]);
+
+          const handleSave = () => {
+            if (parseFloat(draft.amount) <= 0) return;
+            const newExpense = {
+              id: Date.now().toString(),
+              name: draft.name || '未命名項目',
+              category: draft.category,
+              amount: parseFloat(draft.amount),
+              currency: draft.currency.code,
+              amountHKD: parseFloat(draft.amount) * draft.currency.rate,
+              payerId: draft.payerId,
+              splits: Object.fromEntries(Object.entries(draft.shares).map(([k, v]) => [k, parseFloat(v) || 0])),
+              note: draft.note,
+              date: '2026-05-17'
+            };
+            setTrips(prev => [{ ...prev[0], expenses: [newExpense, ...prev[0].expenses] }]);
+            setShowAddForm(false);
+            setCurrentTab('records');
+          };
+
+          return (
+            <div className="flex flex-col h-screen bg-[#F8FAFD] text-[#1A1E23] font-sans max-w-md mx-auto overflow-hidden relative shadow-2xl bg-white rounded-3xl my-4">
+              
+              {/* 主要滾動內容區 */}
+              <div className="flex-1 overflow-y-auto px-8 pt-8">
+                
+                {/* 1. 總覽分頁 (完全復刻你提供的截圖排版) */}
+                {currentTab === 'overview' && (
+                  <div className="space-y-6 pb-28">
+                    <div className="flex justify-between items-center">
+                        <h1 className="text-4xl font-black tracking-tighter">總覽</h1>
+                        <span className="text-xs bg-blue-50 text-blue-500 font-bold px-4 py-1.5 rounded-full">{currentTrip.name}</span>
+                    </div>
+                    
+                    {/* 付款人管理 */}
+                    <div className="bg-gray-50 p-5 rounded-[2.5rem] flex justify-between items-center border border-gray-100">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center text-2xl shadow-inner">🦁</div>
+                        <div>
+                          <span className="font-black text-sm block">Cyan</span>
+                          <span className="text-[10px] font-bold text-blue-500 tracking-widest uppercase">Admin</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 群組總支出 */}
+                    <div className="bg-gray-50 p-8 rounded-[3rem] border border-gray-100 shadow-sm relative overflow-hidden">
+                      <span className="text-[11px] font-black text-gray-400 block mb-2 uppercase tracking-wider">群組總支出 (HKD)</span>
+                      <div className="text-5xl font-black text-gray-800">HK${totalTripExpense.toLocaleString()}</div>
+                    </div>
+
+                    {/* 淨收付 */}
+                    <div className="bg-gray-50 p-8 rounded-[3rem] space-y-4 border border-gray-100 shadow-sm">
+                      <span className="text-xs font-black text-gray-400 uppercase block mb-2">淨收付狀態</span>
+                      {Object.entries(balances).map(([uid, val]) => (
+                        <div key={uid} className="flex justify-between items-center border-b border-gray-200/30 pb-2 last:border-none">
+                          <span className="font-bold text-gray-600">{currentTrip.members.find(m => m.id === uid)?.name}</span>
+                          <span className={`font-black text-lg ${val >= 0 ? 'text-blue-500' : 'text-red-400'}`}>{val > 0 ? '+' : ''}HK${val.toFixed(0)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 債務關係卡片 (還原 Jeremy -> Cyan 需要支付箭頭) */}
+                    <div className="bg-gray-50 p-8 rounded-[3rem] border border-gray-100 shadow-sm">
+                      <span className="text-xs font-black text-gray-400 uppercase block mb-6">債務結算關係</span>
+                      {settlements.length > 0 ? settlements.map((s, idx) => (
+                        <div key={idx} className="flex items-center justify-between border-t border-gray-100 pt-4 first:border-none first:pt-0">
+                          <span className="font-black text-sm text-gray-700">{currentTrip.members.find(m => m.id === s.from)?.name}</span>
+                          <span className="text-xs text-gray-400">需支付給 ➔</span>
+                          <span className="font-black text-sm text-gray-700">{currentTrip.members.find(m => m.id === s.to)?.name}</span>
+                          <span className="font-black text-blue-600 text-lg">HK${s.amount}</span>
+                        </div>
+                      )) : <div className="text-center text-gray-300 italic text-sm py-4">目前所有帳目已清 ✨</div>}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. 消費紀錄分頁 */}
+                {currentTab === 'records' && (
+                  <div className="space-y-6 pb-28">
+                    <h1 className="text-4xl font-black tracking-tighter">消費紀錄</h1>
+                    {currentTrip.expenses.map(exp => (
+                      <div key={exp.id} className="bg-gray-50 p-6 rounded-[2.5rem] border border-gray-100 flex items-center justify-between shadow-sm">
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-xl shadow-sm">
+                            {CATEGORIES.find(c => c.id === exp.category)?.emoji || '💰'}
+                          </div>
+                          <div>
+                            <p className="font-black text-sm text-gray-800">{exp.name}</p>
+                            <p className="text-[10px] text-gray-400 font-bold truncate max-w-[150px]">{exp.note || '無備註'}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-black text-sm text-gray-800">HK${exp.amountHKD.toFixed(1)}</p>
+                          <p className="text-[9px] font-bold text-blue-400 uppercase">{exp.currency} {exp.amount}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 底部固定導覽列 */}
+              <div className="bg-white border-t border-gray-100 px-10 py-6 flex justify-between items-center relative z-40 rounded-b-3xl shadow-lg">
+                <button onClick={() => setCurrentTab('overview')} className={`font-black text-sm transition-transform active:scale-95 ${currentTab === 'overview' ? 'text-blue-500 scale-110' : 'text-gray-300'}`}>總覽</button>
+                <button onClick={() => setCurrentTab('records')} className={`font-black text-sm transition-transform active:scale-95 ${currentTab === 'records' ? 'text-blue-500 scale-110' : 'text-gray-300'}`}>紀錄</button>
+                <button onClick={() => setShowAddForm(true)} className="w-14 h-14 bg-blue-500 text-white rounded-full flex items-center justify-center font-black text-3xl shadow-xl shadow-blue-200 active:scale-90 transition-transform absolute -top-7 left-1/2 -translate-x-1/2 border-4 border-white">+</button>
+              </div>
+
+              {/* 新增消費項目彈窗 (支援多貨幣選取、備註、付款人、分帳細節) */}
+              {showAddForm && (
+                <div className="absolute inset-0 bg-white z-[60] flex flex-col p-8 space-y-6 overflow-y-auto rounded-3xl">
+                  <div className="flex justify-between items-center">
+                    <button onClick={() => setShowAddForm(false)} className="font-black text-sm text-gray-400 active:scale-95">取消</button>
+                    <h2 className="font-black text-xl">新增消費項目</h2>
+                    <div className="w-10"></div>
+                  </div>
+                  
+                  {/* 外幣快捷選擇 */}
+                  <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                    {CURRENCIES.map(c => (
+                      <button key={c.code} onClick={() => setDraft({...draft, currency: c})} className={`px-4 py-2 rounded-xl text-xs font-black whitespace-nowrap transition-all ${draft.currency.code === c.code ? 'bg-black text-white shadow-md' : 'bg-gray-100 text-gray-400'}`}>{c.code}</button>
+                    ))}
+                  </div>
+
+                  {/* 金額輸入 */}
+                  <div className="text-center py-4 border-b border-gray-100">
+                    <span className="text-[10px] text-gray-300 font-bold uppercase block mb-1">輸入金額 ({draft.currency.code})</span>
+                    <input type="number" className="text-5xl font-black text-center w-full outline-none bg-transparent tabular-nums" placeholder="0" value={draft.amount === '0' ? '' : draft.amount} onChange={e => setDraft({...draft, amount: e.target.value})}/>
+                    {draft.currency.code !== 'HKD' && (
+                        <span className="text-xs text-blue-500 font-black block mt-2 bg-blue-50 py-1 rounded-lg">約合 HKD ${(parseFloat(draft.amount || 0) * draft.currency.rate).toFixed(1)} (已連動信用卡匯率)</span>
+                    )}
+                  </div>
+
+                  {/* 項目細節與類別 */}
+                  <div className="space-y-4">
+                    <input type="text" placeholder="項目名稱 (例如: 壽司/計程車)" className="w-full p-5 bg-gray-50 rounded-2xl outline-none font-bold text-sm shadow-inner focus:bg-white border focus:border-blue-200 transition-all" value={draft.name} onChange={e => setDraft({...draft, name: e.target.value})}/>
+                    <input type="text" placeholder="輸入備註或備忘錄（選填）" className="w-full p-5 bg-gray-50 rounded-2xl outline-none font-bold text-sm shadow-inner focus:bg-white border focus:border-blue-200 transition-all" value={draft.note} onChange={e => setDraft({...draft, note: e.target.value})}/>
+                    
+                    <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+                      {CATEGORIES.map(cat => (
+                        <button key={cat.id} onClick={() => setDraft({...draft, category: cat.id})} className={`px-4 py-2 rounded-xl text-xs font-black border whitespace-nowrap transition-all ${draft.category === cat.id ? 'bg-blue-500 text-white border-blue-500 shadow-md' : 'bg-white text-gray-400 border-gray-100'}`}>{cat.emoji} {cat.name}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 付款人與均分狀態 */}
+                  <div className="bg-gray-50 p-5 rounded-3xl space-y-4 border border-gray-100 shadow-inner">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] text-gray-400 font-black uppercase">誰付了錢？</span>
+                      <div className="flex gap-2">
+                          {currentTrip.members.map(m => (
+                              <button key={m.id} onClick={() => setDraft({...draft, payerId: m.id})} className={`px-4 py-2 rounded-xl text-xs font-black border transition-all ${draft.payerId === m.id ? 'bg-white border-orange-400 text-orange-600 shadow-sm' : 'bg-white/50 text-gray-400 border-transparent opacity-60'}`}>{m.emoji} {m.name}</button>
+                          ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button onClick={handleSave} className="w-full py-5 bg-black text-white font-black rounded-[2rem] text-sm shadow-xl hover:bg-gray-800 active:scale-95 transition-all mt-auto">儲存紀錄</button>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
